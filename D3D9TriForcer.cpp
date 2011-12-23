@@ -22,10 +22,10 @@ typedef HRESULT (STDMETHODCALLTYPE *SetSamplerStatePtr)(IDirect3DDevice9 *This, 
 
 // Globals
 static HMODULE d3d9_module;
-static Direct3DCreate9Ptr direct3d_create_9 = 0;
-static Direct3DCreate9ExPtr direct3d_create_9_ex = 0;
+static Direct3DCreate9Ptr RealDirect3DCreate9 = 0;
 
-// Maps with pointers to original functions. Pointers are stored on the heap, because they need to be non-movable
+// Map from original addresses to detours trampoline addresses.
+// Trampoline addresses are stored on the heap, because they need to be non-movable
 static std::unordered_map<CreateDevicePtr, std::unique_ptr<CreateDevicePtr>> create_device_ptr_map;
 static std::unordered_map<SetSamplerStatePtr, std::unique_ptr<SetSamplerStatePtr>> set_sampler_state_ptr_map;
 
@@ -35,30 +35,36 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 		return TRUE;
 	}
 
-	direct3d_create_9 = (Direct3DCreate9Ptr)DetourFindFunction("C:/Windows/System32/d3d9.dll", "Direct3DCreate9");
-	direct3d_create_9_ex = (Direct3DCreate9ExPtr)DetourFindFunction("C:/Windows/System32/d3d9.dll", "Direct3DCreate9Ex");
+	RealDirect3DCreate9 = (Direct3DCreate9Ptr)DetourFindFunction("C:/Windows/System32/d3d9.dll", "Direct3DCreate9");	
 
 	return TRUE;
 }
 
 HRESULT WINAPI HookedSetSamplerState(IDirect3DDevice9 *device, DWORD Sampler, D3DSAMPLERSTATETYPE Type, DWORD Value)
 {
-	if(Type == D3DSAMP_MAGFILTER) {
-		Value = D3DTEXF_POINT;
-	}
-	else if(Type == D3DSAMP_MINFILTER) {
-		Value = D3DTEXF_POINT;
-	}
-	else if(Type == D3DSAMP_MIPFILTER) {
-		Value = D3DTEXF_NONE;
-	}
-
 	SetSamplerStatePtr *set_sampler_state_ptr = set_sampler_state_ptr_map[device->lpVtbl->SetSamplerState].get();
-	if(set_sampler_state_ptr) {
-		return (*set_sampler_state_ptr)(device, Sampler, Type, Value);	
+	if(set_sampler_state_ptr) {		
+		// Prohibit setting of negative LOD bias
+		if(Type == D3DSAMP_MIPMAPLODBIAS) {
+			float lod_bias = *((float*)&Value);
+			if(lod_bias < 0.0f) {
+				return D3D_OK;
+			}
+		}
+
+		// Set what was asked for
+		HRESULT hresult = (*set_sampler_state_ptr)(device, Sampler, Type, Value);
+
+		// Force trilinear, no matter what
+		(*set_sampler_state_ptr)(device, Sampler, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+
+		return hresult;
 	}
 	else {
-		// Hack: This only happens on D3D9 initialization. Always safe to skip this?
+		// Hack: Don't know why this happens. Sometimes this function gets called, but 
+		// the VTable entry address was not patched by HookDirect3DDevice9, therefore the 
+		// detours trampoline can't be determined.		
+		// We just return that the call succeeded anyway. For most apps it will work anyway.
 		return D3D_OK;
 	}
 }
@@ -106,7 +112,7 @@ void HookDirect3D9(IDirect3D9 *direct3d9)
 
 IDirect3D9* WINAPI Direct3DCreate9(UINT SDKVersion)
 {
-	IDirect3D9 *direct3d9 = direct3d_create_9(SDKVersion);
+	IDirect3D9 *direct3d9 = RealDirect3DCreate9(SDKVersion);
 
 	if(direct3d9) {
 		HookDirect3D9(direct3d9);
@@ -118,6 +124,6 @@ IDirect3D9* WINAPI Direct3DCreate9(UINT SDKVersion)
 HRESULT WINAPI Direct3DCreate9Ex(UINT SDKVersion, IDirect3D9Ex **direct_3d_9_ex)
 {
 	// D3D9Ex is not supported
-	direct3d_create_9_ex = nullptr;
+	*direct_3d_9_ex = nullptr;
 	return D3DERR_NOTAVAILABLE;
 }

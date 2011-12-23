@@ -52,6 +52,8 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <LinkIncremental>false</LinkIncremental>
     <TargetName>d3d9</TargetName>
+    <IncludePath>d:\Libraries\Microsoft DirectX SDK (June 2010)\include;D:\Libraries\Detours Express 3.0\include;$(IncludePath)</IncludePath>
+    <LibraryPath>d:\Libraries\Microsoft DirectX SDK (June 2010)\lib\x86;D:\Libraries\Detours Express 3.0\lib;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>

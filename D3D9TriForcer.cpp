@@ -26,8 +26,8 @@ static Direct3DCreate9Ptr direct3d_create_9 = 0;
 static Direct3DCreate9ExPtr direct3d_create_9_ex = 0;
 
 // Maps with pointers to original functions. Pointers are stored on the heap, because they need to be non-movable
-static std::unordered_map<IDirect3D9*, std::unique_ptr<CreateDevicePtr>> create_device_ptr_map;
-static std::unordered_map<IDirect3DDevice9*, std::unique_ptr<SetSamplerStatePtr>> set_sampler_state_ptr_map;
+static std::unordered_map<CreateDevicePtr, std::unique_ptr<CreateDevicePtr>> create_device_ptr_map;
+static std::unordered_map<SetSamplerStatePtr, std::unique_ptr<SetSamplerStatePtr>> set_sampler_state_ptr_map;
 
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 {
@@ -49,26 +49,37 @@ HRESULT WINAPI HookedSetSamplerState(IDirect3DDevice9 *device, DWORD Sampler, D3
 	else if(Type == D3DSAMP_MINFILTER) {
 		Value = D3DTEXF_POINT;
 	}
+	else if(Type == D3DSAMP_MIPFILTER) {
+		Value = D3DTEXF_NONE;
+	}
 
-	SetSamplerStatePtr *set_sampler_state_ptr = set_sampler_state_ptr_map[device].get();
-	return (*set_sampler_state_ptr)(device, Sampler, Type, Value);
+	SetSamplerStatePtr *set_sampler_state_ptr = set_sampler_state_ptr_map[device->lpVtbl->SetSamplerState].get();
+	if(set_sampler_state_ptr) {
+		return (*set_sampler_state_ptr)(device, Sampler, Type, Value);	
+	}
+	else {
+		// Hack: This only happens on D3D9 initialization. Always safe to skip this?
+		return D3D_OK;
+	}
 }
 
 void HookDirect3DDevice9(IDirect3DDevice9 *device)
 {
-	SetSamplerStatePtr *set_sampler_state_ptr = new SetSamplerStatePtr(device->lpVtbl->SetSamplerState);
-	set_sampler_state_ptr_map[device] = std::unique_ptr<SetSamplerStatePtr>(set_sampler_state_ptr);
-
-	DetourTransactionBegin();
-	DetourUpdateThread(GetCurrentThread());
-	DetourAttach((void**)set_sampler_state_ptr, HookedSetSamplerState);
-	DetourTransactionCommit();
+	if(set_sampler_state_ptr_map.find(device->lpVtbl->SetSamplerState) == set_sampler_state_ptr_map.end()) {
+		SetSamplerStatePtr *set_sampler_state_ptr = new SetSamplerStatePtr(device->lpVtbl->SetSamplerState);
+		set_sampler_state_ptr_map[device->lpVtbl->SetSamplerState] = std::unique_ptr<SetSamplerStatePtr>(set_sampler_state_ptr);
+	
+		DetourTransactionBegin();
+		DetourUpdateThread(GetCurrentThread());
+		DetourAttach((void**)set_sampler_state_ptr, HookedSetSamplerState);
+		DetourTransactionCommit();
+	}
 }
 
 HRESULT WINAPI HookedCreateDevice(IDirect3D9 *direct3d9, UINT Adapter, D3DDEVTYPE DeviceType, HWND hFocusWindow, 
 	DWORD BehaviorFlags, D3DPRESENT_PARAMETERS* pPresentationParameters, IDirect3DDevice9** ppReturnedDeviceInterface)
 {
-	CreateDevicePtr *create_device_ptr = create_device_ptr_map[direct3d9].get();
+	CreateDevicePtr *create_device_ptr = create_device_ptr_map[direct3d9->lpVtbl->CreateDevice].get();
 
 	HRESULT hresult = (*create_device_ptr)(direct3d9, Adapter, DeviceType, hFocusWindow, 
 		BehaviorFlags, pPresentationParameters, ppReturnedDeviceInterface);
@@ -82,13 +93,15 @@ HRESULT WINAPI HookedCreateDevice(IDirect3D9 *direct3d9, UINT Adapter, D3DDEVTYP
 
 void HookDirect3D9(IDirect3D9 *direct3d9)
 {	
-	CreateDevicePtr *create_device_ptr = new CreateDevicePtr(direct3d9->lpVtbl->CreateDevice);
-	create_device_ptr_map[direct3d9] = std::unique_ptr<CreateDevicePtr>(create_device_ptr);
+	if(create_device_ptr_map.find(direct3d9->lpVtbl->CreateDevice) == create_device_ptr_map.end()) {
+		CreateDevicePtr *create_device_ptr = new CreateDevicePtr(direct3d9->lpVtbl->CreateDevice);
+		create_device_ptr_map[direct3d9->lpVtbl->CreateDevice] = std::unique_ptr<CreateDevicePtr>(create_device_ptr);
 
-	DetourTransactionBegin();
-	DetourUpdateThread(GetCurrentThread());
-	DetourAttach((void**)create_device_ptr, HookedCreateDevice);
-	DetourTransactionCommit();
+		DetourTransactionBegin();
+		DetourUpdateThread(GetCurrentThread());
+		DetourAttach((void**)create_device_ptr, HookedCreateDevice);
+		DetourTransactionCommit();
+	}
 }
 
 IDirect3D9* WINAPI Direct3DCreate9(UINT SDKVersion)
@@ -104,7 +117,7 @@ IDirect3D9* WINAPI Direct3DCreate9(UINT SDKVersion)
 
 HRESULT WINAPI Direct3DCreate9Ex(UINT SDKVersion, IDirect3D9Ex **direct_3d_9_ex)
 {
-	// D3D9Ex is not supported yet
-	*direct_3d_9_ex = nullptr;
+	// D3D9Ex is not supported
+	direct3d_create_9_ex = nullptr;
 	return D3DERR_NOTAVAILABLE;
 }

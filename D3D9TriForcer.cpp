@@ -44,14 +44,6 @@ HRESULT WINAPI HookedSetSamplerState(IDirect3DDevice9 *device, DWORD Sampler, D3
 {
 	SetSamplerStatePtr *set_sampler_state_ptr = set_sampler_state_ptr_map[device->lpVtbl->SetSamplerState].get();
 	if(set_sampler_state_ptr) {		
-		// Prohibit setting of negative LOD bias
-		if(Type == D3DSAMP_MIPMAPLODBIAS) {
-			float lod_bias = *((float*)&Value);
-			if(lod_bias < 0.0f) {
-				return D3D_OK;
-			}
-		}
-
 		// Set what was asked for
 		HRESULT hresult = (*set_sampler_state_ptr)(device, Sampler, Type, Value);
 
